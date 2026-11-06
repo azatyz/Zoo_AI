@@ -154,7 +154,6 @@ if st.sidebar.button("Запустить симуляцию", type="primary"):
 
             # Вывод численных результатов
             with columns[index]:
-                st.markdown(f"### {model.name}")
                 display_names = {
                 "Классическая": "Классическая модель",
                 "ML-модель": "ML-модель",

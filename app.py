@@ -43,23 +43,26 @@ st.subheader("Доступные модели")
 col1, col2, col3 = st.columns(3)
 
 with col1:
-    st.markdown("### Классическая модель")
-    st.write("""
+    st.markdown("""
+    ### Классическая
+
     Демонстрационная модель, использующая упрощённую
     математическую зависимость для расчёта изменения
     концентрации металла по ступеням.
     """)
 
 with col2:
-    st.markdown("### ML-модель")
-    st.write("""
+    st.markdown("""
+    ### ML-модель
+
     Демонстрационная реализация, имитирующая отклонения
     результатов базовой модели с помощью случайного шума.
     """)
 
 with col3:
-    st.markdown("### Гибридная модель")
-    st.write("""
+    st.markdown("""
+    ### Гибридная
+
     Демонстрационная комбинация результатов классической
     и ML-модели путём усреднения.
     """)
@@ -124,6 +127,11 @@ if st.sidebar.button("Запустить симуляцию", type="primary"):
         ax.set_xticks(range(stages + 1))
 
         columns = st.columns(len(selected_models))
+        display_names = {
+            "Классическая": "Классическая модель",
+            "ML-модель": "ML-модель",
+            "Гибридная": "Гибридная модель"
+    }
 
         for index, model_name in enumerate(selected_models):
 
@@ -140,17 +148,36 @@ if st.sidebar.button("Запустить симуляцию", type="primary"):
                 range(stages + 1),
                 concentrations,
                 marker="o",
-                label=model.name,
+                label=display_names[model_name],
                 linewidth=2
             )
 
-            # Выводим численные результаты
+            # Вывод численных результатов
             with columns[index]:
-                st.info(
-                    f"**{model.name}**\n\n"
-                    f"Степень извлечения: **{recovery:.2f}%**\n\n"
-                    f"Остаточная концентрация: "
-                    f"**{concentrations[-1]:.2f} г/л**"
+                st.markdown(f"### {model.name}")
+                display_names = {
+                "Классическая": "Классическая модель",
+                "ML-модель": "ML-модель",
+                "Гибридная": "Гибридная модель"
+            }
+
+                st.markdown(f"### {display_names[model_name]}")
+
+                st.metric(
+                    "Степень извлечения",
+                    f"{recovery:.2f}%"
+                )
+
+                st.metric(
+                    "Начальная концентрация",
+                    f"{feed_conc:.2f} г/л"
+                )
+
+                st.metric(
+                    "Остаточная концентрация",
+                    f"{concentrations[-1]:.2f} г/л",
+                    delta=f"{concentrations[-1] - feed_conc:.2f} г/л",
+                    delta_color="inverse"
                 )
 
         ax.legend()

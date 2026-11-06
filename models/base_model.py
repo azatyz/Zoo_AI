@@ -1,6 +1,9 @@
-class BaseExtractionModel:
+from abc import ABC, abstractmethod
+
+class BaseExtractionModel(ABC):
     def __init__(self, name):
         self.name = name
 
+    @abstractmethod
     def predict(self, stages, feed_conc, flow_ratio):
-        raise NotImplementedError("Метод predict должен быть реализован в дочернем классе")
+        pass

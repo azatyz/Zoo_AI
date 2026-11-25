@@ -1,4 +1,4 @@
-from models.base_model import BaseExtractionModel
+from models.legacy_extraction.base_model import BaseExtractionModel
 
 
 class ClassicModel(BaseExtractionModel):

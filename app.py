@@ -3,9 +3,9 @@ import streamlit as st
 import matplotlib.pyplot as plt
 
 # Импортируем модели из папки models
-from models.classic_model import ClassicModel
-from models.ml_model import MLModel
-from models.hybrid_model import HybridModel
+from models.legacy_extraction.classic_model import ClassicModel
+from models.legacy_extraction.ml_model import MLModel
+from models.legacy_extraction.hybrid_model import HybridModel
 
 
 # Настройки страницы

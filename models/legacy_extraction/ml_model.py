@@ -1,7 +1,7 @@
 import numpy as np
 
-from models.base_model import BaseExtractionModel
-from models.classic_model import ClassicModel
+from models.legacy_extraction.base_model import BaseExtractionModel
+from models.legacy_extraction.classic_model import ClassicModel
 
 
 class MLModel(BaseExtractionModel):

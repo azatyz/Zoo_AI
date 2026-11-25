@@ -2,10 +2,34 @@
 __pycache__/
 *.py[cod]
 *.pyo
+.env
+*.log
 
 # Virtual environment
 venv/
 .venv/
+env/
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+
+# SQLite temporary files
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Raw archives & heavy downloads
+*.zip
+*.tar.gz
+*.rar
+*.7z
+data/raw/
+
+# Heavy ML caches / checkpoints
+.cache/
+*.ckpt
+*.h5
+*.safetensors
 
 # Streamlit
 .streamlit/secrets.toml

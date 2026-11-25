@@ -1,8 +1,8 @@
 import numpy as np
 
-from models.base_model import BaseExtractionModel
-from models.classic_model import ClassicModel
-from models.ml_model import MLModel
+from models.legacy_extraction.base_model import BaseExtractionModel
+from models.legacy_extraction.classic_model import ClassicModel
+from models.legacy_extraction.ml_model import MLModel
 
 
 class HybridModel(BaseExtractionModel):

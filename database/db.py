@@ -14,21 +14,31 @@ DB_PATH = PROJECT_ROOT / "database" / "zoo.db"
 MODELS_SEED_DATA: list[dict[str, str]] = [
     {
         "id": "mxene_ml",
-        "name": "MXene Gas Sensor ML",
-        "architecture": "Табличный ML (scikit-learn / joblib)",
+        "name": "MXene Gas Sensor ML (XGBoost)",
+        "architecture": "Табличный ML (XGBoost / scikit-learn)",
         "status": "local_cpu",
         "hardware_req": "Локальный CPU (Windows / Linux, < 100 МБ ОЗУ)",
-        "input_format": "Табличные признаки системы «MXene + газ» (материал, адсорбат, физико-химические дескрипторы)",
-        "output_format": "Энергия адсорбции E_ads (эВ), время инференса и интерпретация прочности связывания",
+        "input_format": (
+            "Пара {mxene_formula, adsorbate} из data/mxene_clean.csv (240 MXene × 8 газов: "
+            "CH4, CO, H2S, HCHO, NH3, NO, NO2, SO2); 17 дескрипторов подставляются автоматически"
+        ),
+        "output_format": (
+            "Энергия адсорбции E_ads (эВ) для сайта top_M, эталон из датасета, "
+            "пометка train/test, время инференса и интерпретация"
+        ),
         "suitable_for": (
             "Быстрый скрининг чувствительности газовых сенсоров на основе MXene "
-            "(NH3, NO2, CO, H2S и др.), массовый перебор табличных дескрипторов на CPU."
+            "(CH4, CO, H2S, HCHO, NH3, NO, NO2, SO2) на локальном CPU."
         ),
         "limitations": (
-            "Применима только в рамках домена обучающей выборки MXene (Zenodo); "
-            "не учитывает произвольную 3D-геометрию и сложные дефекты поверхности вне таблицы признаков."
+            "Работает только на готовых образцах из data/mxene_clean.csv (сайт адсорбции top_M); "
+            "произвольная формула или новый газ требуют внешнего расчёта дескрипторов (pymatgen/matminer). "
+            "На выборке train ошибка занижена — ориентируйтесь на пометку train/test."
         ),
-        "metrics_summary": "Быстрый отклик на CPU (< 0.05 с); оценка качества по MAE / RMSE / R² на выборке Zenodo",
+        "metrics_summary": (
+            "Локальная модель XGBoost (test): MAE 0.0124 эВ, RMSE 0.0167 эВ, R² = 0.9993 "
+            "(случайное разбиение по строкам); ориентир статьи (RFR): MAE 0.32 эВ, R² = 0.95"
+        ),
     },
     {
         "id": "mace_mp0",
@@ -36,71 +46,90 @@ MODELS_SEED_DATA: list[dict[str, str]] = [
         "architecture": "Универсальный эквивариантный межатомный потенциал (MLIP, MACE + ASE)",
         "status": "local_cpu",
         "hardware_req": "Локальный CPU (Windows / Linux, от 4 ГБ ОЗУ; поддерживается также GPU)",
-        "input_format": "3D-структура атомной системы в формате .xyz или .cif",
-        "output_format": "Оценка полной энергии / энергии адсорбции E_ads (эВ) и время single-point расчета",
+        "input_format": (
+            "Имя готового пресета (например, Cu111_CO) или три 3D-структуры (.xyz / .cif): "
+            "system_path (поверхность + молекула), surface_path (поверхность), molecule_path (молекула)"
+        ),
+        "output_format": (
+            "E_ads = E(система) − E(поверхность) − E(молекула) в эВ, энергии трёх структур, "
+            "число атомов, время single-point расчёта и предупреждения"
+        ),
         "suitable_for": (
-            "Универсальный single-point расчет атомных конфигураций «адсорбат + поверхность», "
-            "работа с произвольными элементами периодической таблицы из .xyz/.cif файлов."
+            "Универсальный single-point расчёт E_ads для произвольных элементов периодической таблицы "
+            "по готовым пресетам или пользовательским файлам .xyz/.cif."
         ),
         "limitations": (
-            "На CPU расчет крупных суперъячеек (> 100–150 атомов) занимает больше времени; "
-            "для точной E_ads без отдельного расчёта референсов поверхности и молекулы даётся приближённая оценка / полная энергия комплекса."
+            "Single-point без релаксации геометрии на CPU (float64) — значения ориентировочные "
+            "(для точных выводов нужен DFT); максимум 300 атомов, мин. расстояние ≥ 0.6 Å. "
+            "Веса: weights/mace_mp_small.model."
         ),
-        "metrics_summary": "Универсальный потенциал Materials Project (small); оффлайн single-point расчет на CPU",
+        "metrics_summary": (
+            "Ориентиры CatBench (с релаксацией): MAE ~0.36 эВ (металлы), 0.181 эВ (MOFs), "
+            "0.250 эВ (оксиды); single-point пресета на CPU ~0.5–1.3 с после warmup()"
+        ),
     },
     {
         "id": "adsmt",
         "name": "AdsMT",
-        "architecture": "Мультимодальный трансформер для адсорбции",
+        "architecture": "Мультимодальный трансформер (AdsGT/GNN + MLP адсорбата + cross-attention)",
         "status": "catalog_gpu_only",
-        "hardware_req": "Linux + NVIDIA GPU (CUDA, от 12–16 ГБ VRAM)",
-        "input_format": "Текстовое/структурное описание каталитической поверхности, сайта адсорбции и адсорбата",
-        "output_format": "Предсказанная энергия адсорбции E_ads (эВ) и карты внимания",
+        "hardware_req": "Linux + NVIDIA GPU (обучение: A100; в текущем MVP — каталог-советчик)",
+        "input_format": "Периодический граф поверхности + 208 RDKit-дескрипторов адсорбата (без заранее заданного сайта)",
+        "output_format": "Предсказанная энергия адсорбции (GMAE / E_ads, эВ) и карты внимания",
         "suitable_for": (
-            "Высокоточный скрининг адсорбции на сложных каталитических поверхностях и сплавах "
-            "при наличии мультимодальных описаний."
+            "Высокоточный скрининг адсорбции на сложных каталитических поверхностях и сплавах, "
+            "когда положение адсорбата (сайт) заранее не задано."
         ),
         "limitations": (
-            "Требует NVIDIA GPU и Linux-окружение; не запускается локально на Windows + CPU. "
-            "По согласованию с куратором запрос GPU в техподдержке ИРИТ вынесен на следующий спринт."
+            "Валидированный пайплайн авторов требует Linux и NVIDIA GPU (тяжёлые энкодеры вроде "
+            "GemNet-OC без GPU непригодны); запрос GPU в техподдержке ИРИТ вынесен на следующий спринт."
         ),
-        "metrics_summary": "Высокая точность на каталитических бенчмарках (требуется GPU-кластер для инференса)",
+        "metrics_summary": (
+            "Тест MAE: 0.095 эВ (FG-GMAE), 0.143 эВ (Alloy-GMAE), 0.389 эВ (OCD-GMAE с transfer learning); "
+            "Nature Communications 2025"
+        ),
     },
     {
         "id": "lei_framework",
-        "name": "LEI-framework",
-        "architecture": "Графовая нейросеть (GNN / PyTorch Geometric) с локальным окружением",
+        "name": "LEI-framework (LERN)",
+        "architecture": "Дескрипторы локального окружения (Вороной) + RF / ResNet-34 (LERN)",
         "status": "catalog_gpu_only",
-        "hardware_req": "NVIDIA GPU + PyTorch Geometric (CUDA, от 8–16 ГБ VRAM)",
-        "input_format": "Атомный граф комплекса «поверхность + адсорбат» (.cif / .traj / graph)",
-        "output_format": "Энергия адсорбции E_ads (эВ) и локальные вклады узлов графа",
+        "hardware_req": "NVIDIA GPU + PyTorch Geometric (LERN обучался на RTX 3080; в MVP — советчик)",
+        "input_format": "Кристаллическая структура «поверхность + адсорбат» и сайт -> матрица локального окружения 6×11 (3 слоя соседей)",
+        "output_format": "Энергия адсорбции E_ads (эВ) по признакам ближайшего окружения",
         "suitable_for": (
-            "Моделирование локальных электронных и геометрических взаимодействий "
-            "в активных центрах катализаторов и пористых материалах."
+            "Предсказание E_ads по локальному окружению места адсорбции: катализ (HER), "
+            "газовые сенсоры, захват углерода, хранение энергии."
         ),
         "limitations": (
-            "Зависит от CUDA-сборки PyTorch Geometric и требует GPU для приемлемого времени расчета. "
-            "Запуск на сервере ИРИТ с GPU запланирован на следующий этап проекта."
+            "Требует сборки пайплайна графов Вороного / PyTorch Geometric и знания места адсорбции; "
+            "нейросеть LERN рассчитана на GPU (RF-ветка — кандидат на перенос на CPU)."
         ),
-        "metrics_summary": "Специализированная GNN-архитектура для локальных взаимодействий (только каталог-советчик)",
+        "metrics_summary": (
+            "RF-ветка: MAE 0.14 эВ (H на 3D-материалах); LERN (ResNet-34): наименьший MAE среди "
+            "CGCNN/SchNet/ALIGNN на 3D-выборке; JMI 2024"
+        ),
     },
     {
         "id": "oc20_fairchem",
         "name": "OC20 / FAIRChem",
-        "architecture": "Предобученные GNN-потенциалы (EquiformerV2 / GemNet-OC / PaiNN)",
+        "architecture": "Предобученные графовые нейросети (SchNet, DimeNet++, GemNet-OC, eSCN)",
         "status": "catalog_gpu_only",
         "hardware_req": "Серверный NVIDIA GPU (CUDA, от 16–24+ ГБ VRAM) и крупные веса чекпоинтов",
-        "input_format": "Атомные структуры каталитических слэбов и адсорбатов (ASE Atoms / LMDB / .cif)",
+        "input_format": "3D-граф каталитических слэбов и адсорбатов (ASE Atoms / LMDB / .cif) для задач S2EF и IS2RE",
         "output_format": "Энергия адсорбции E_ads (эВ), межатомные силы и релаксация геометрии",
         "suitable_for": (
-            "Крупномасштабный гетерогенный катализ, релаксация систем «слэб + адсорбат» "
+            "Крупномасштабный гетерогенный катализ и релаксация систем «слэб + адсорбат» "
             "в химическом пространстве Open Catalyst 2020 (OC20)."
         ),
         "limitations": (
-            "Тяжелые чекпоинты (сотни МБ — гигабайты) и критическая зависимость от серверного GPU. "
-            "На текущем этапе используется как рекомендация; развертывание на GPU ИРИТ планируется в следующем спринте."
+            "Тяжёлые чекпойнты и критическая зависимость от серверного GPU; "
+            "на текущем этапе используется как рекомендация до развёртывания на GPU ИРИТ."
         ),
-        "metrics_summary": "Индустриальный стандарт OC20 для катализа (MAE ~ 0.23–0.35 эВ на GPU-сервере)",
+        "metrics_summary": (
+            "Базлайны OC20 IS2RE-direct (test ID): SchNet MAE 0.639 эВ, DimeNet++ MAE 0.562 эВ; "
+            "Relaxation-based DimeNet++: 0.512 эВ"
+        ),
     },
 ]
 
@@ -154,7 +183,7 @@ def init_db() -> None:
         for model in MODELS_SEED_DATA:
             cursor.execute(
                 """
-                INSERT OR IGNORE INTO models_catalog (
+                INSERT INTO models_catalog (
                     id, name, architecture, status, hardware_req,
                     input_format, output_format, suitable_for,
                     limitations, metrics_summary
@@ -163,6 +192,16 @@ def init_db() -> None:
                     :input_format, :output_format, :suitable_for,
                     :limitations, :metrics_summary
                 )
+                ON CONFLICT(id) DO UPDATE SET
+                    name = excluded.name,
+                    architecture = excluded.architecture,
+                    status = excluded.status,
+                    hardware_req = excluded.hardware_req,
+                    input_format = excluded.input_format,
+                    output_format = excluded.output_format,
+                    suitable_for = excluded.suitable_for,
+                    limitations = excluded.limitations,
+                    metrics_summary = excluded.metrics_summary
                 """,
                 model,
             )

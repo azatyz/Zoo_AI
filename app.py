@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import importlib
 import math
 from pathlib import Path
@@ -27,80 +28,9 @@ STRUCTURES_DIR = PROJECT_ROOT / "data" / "structures"
 BENCHMARKS_PATH = PROJECT_ROOT / "data" / "test_cases" / "benchmarks.csv"
 
 ALLOWED_STRUCTURE_EXTS = {".xyz", ".cif"}
-TARGET_COL_CANDIDATES = {
-    "e_ads",
-    "e_ads_ev",
-    "eads",
-    "eads_ev",
-    "adsorption_energy",
-    "adsorption_energy_ev",
-    "target",
-    "y",
-}
-
-DEFAULT_MXENE_TEXT_FIELDS: list[dict[str, str]] = [
-    {
-        "key": "mxene",
-        "label": "Материал MXene",
-        "default": "Ti3C2O2",
-        "help": "Например: Ti3C2O2, Ti3C2(OH)2, Ti2CO2, V2CO2, Nb2CO2.",
-    },
-    {
-        "key": "gas",
-        "label": "Газ-адсорбат",
-        "default": "NH3",
-        "help": "Например: NH3, NO2, CO, CO2, H2S, SO2, CH4.",
-    },
-    {
-        "key": "site",
-        "label": "Сайт / терминация поверхности",
-        "default": "O-terminated",
-        "help": "Например: O-terminated, OH-terminated, F-terminated, top, hollow.",
-    },
-]
-
-DEFAULT_MXENE_NUMERIC_FIELDS: list[dict[str, Any]] = [
-    {
-        "key": "distance_a",
-        "label": "Расстояние газ–поверхность (Å)",
-        "default": "2.35",
-        "min": 0.5,
-        "max": 15.0,
-        "help": "Допустимый диапазон: от 0.5 до 15.0 Å.",
-    },
-    {
-        "key": "charge_transfer_e",
-        "label": "Перенос заряда (e)",
-        "default": "-0.18",
-        "min": -5.0,
-        "max": 5.0,
-        "help": "Допустимый диапазон: от -5.0 до 5.0 e.",
-    },
-    {
-        "key": "band_gap_ev",
-        "label": "Ширина запрещенной зоны (эВ)",
-        "default": "0.45",
-        "min": 0.0,
-        "max": 15.0,
-        "help": "Допустимый диапазон: от 0.0 до 15.0 эВ.",
-    },
-    {
-        "key": "work_function_ev",
-        "label": "Работа выхода (эВ)",
-        "default": "4.85",
-        "min": 0.5,
-        "max": 12.0,
-        "help": "Допустимый диапазон: от 0.5 до 12.0 эВ.",
-    },
-    {
-        "key": "temperature_k",
-        "label": "Температура (K)",
-        "default": "300.0",
-        "min": 1.0,
-        "max": 3000.0,
-        "help": "Допустимый диапазон: от 1.0 до 3000.0 K.",
-    },
-]
+MXENE_NON_FEATURES = {"mxene_formula", "adsorbate", "adsorption_site", "eads", "split"}
+MXENE_MODEL_NAME = "MXene Gas Sensor ML (XGBoost)"
+MACE_MODEL_NAME = "MACE-MP-0 (small)"
 
 
 def _resolve_model_class(module: Any, candidate_names: tuple[str, ...]) -> type | None:
@@ -126,22 +56,24 @@ def load_ml_model(
     module_path: str,
     candidate_names: tuple[str, ...],
 ) -> dict[str, Any]:
-    """Безопасно загружает и кэширует локальную ML-модель."""
+    """Безопасно загружает, прогревает (warmup) и кэширует локальную ML-модель."""
     try:
         module = importlib.import_module(module_path)
     except ImportError as exc:
         missing_name = getattr(exc, "name", "") or ""
-        if missing_name in {module_path, "models", "models.base_model"} or not missing_name:
+        if missing_name in {module_path, "models", "models.base"} or not missing_name:
             return {
                 "available": False,
                 "status": "pending_merge",
                 "model": None,
-                "message": "Модуль ML ожидает слияния ветки `feat/adsorption-models`",
+                "model_class": None,
+                "message": "Модуль ML не найден или ожидает слияния ветки моделей.",
             }
         return {
             "available": False,
             "status": "dep_error",
             "model": None,
+            "model_class": None,
             "message": f"Не удалось загрузить зависимость ML-модуля ({missing_name}): {exc}",
         }
     except Exception as exc:
@@ -149,6 +81,7 @@ def load_ml_model(
             "available": False,
             "status": "load_error",
             "model": None,
+            "model_class": None,
             "message": f"Ошибка при импорте модуля `{module_path}`: {exc}",
         }
 
@@ -158,6 +91,7 @@ def load_ml_model(
             "available": False,
             "status": "load_error",
             "model": None,
+            "model_class": None,
             "message": f"В модуле `{module_path}` не найден класс модели с методами validate_input/predict.",
         }
 
@@ -168,14 +102,37 @@ def load_ml_model(
             "available": False,
             "status": "load_error",
             "model": None,
+            "model_class": model_cls,
             "message": f"Ошибка инициализации модели `{model_cls.__name__}`: {exc}",
         }
+
+    warmup_fn = getattr(instance, "warmup", None)
+    if callable(warmup_fn):
+        try:
+            loaded, warmup_error = warmup_fn()
+        except Exception as exc:
+            return {
+                "available": False,
+                "status": "warmup_error",
+                "model": None,
+                "model_class": model_cls,
+                "message": f"Ошибка при загрузке весов модели `{model_cls.__name__}`: {exc}",
+            }
+        if not loaded:
+            return {
+                "available": False,
+                "status": "warmup_error",
+                "model": None,
+                "model_class": model_cls,
+                "message": warmup_error or f"Не удалось загрузить веса модели `{model_cls.__name__}`.",
+            }
 
     return {
         "available": True,
         "status": "connected",
         "model": instance,
-        "message": "Модуль ML подключен и готов к локальному расчету на CPU.",
+        "model_class": model_cls,
+        "message": "Модуль ML подключен, веса загружены и готовы к локальному расчету на CPU.",
     }
 
 
@@ -192,16 +149,19 @@ def load_csv_safe(file_path_str: str) -> tuple[pd.DataFrame | None, str | None]:
         return None, f"Не удалось прочитать файл `{path.name}`: {exc}"
 
 
-def list_structure_presets(structures_dir: Path) -> list[Path]:
-    """Возвращает отсортированный список .xyz и .cif файлов из папки пресетов."""
+def list_structure_presets(structures_dir: Path) -> list[str]:
+    """Возвращает имена пресетов, для которых есть все три файла (_system, _surface, _molecule)."""
     if not structures_dir.exists() or not structures_dir.is_dir():
         return []
-    files = [
-        p
-        for p in structures_dir.iterdir()
-        if p.is_file() and p.suffix.lower() in ALLOWED_STRUCTURE_EXTS
-    ]
-    return sorted(files, key=lambda p: p.name.lower())
+    names: list[str] = []
+    for system_file in sorted(structures_dir.glob("*_system.xyz"), key=lambda p: p.name.lower()):
+        preset_name = system_file.name[: -len("_system.xyz")]
+        if (
+            (structures_dir / f"{preset_name}_surface.xyz").exists()
+            and (structures_dir / f"{preset_name}_molecule.xyz").exists()
+        ):
+            names.append(preset_name)
+    return names
 
 
 def _parse_float_strict(raw_value: str) -> tuple[float | None, str | None]:
@@ -216,39 +176,6 @@ def _parse_float_strict(raw_value: str) -> tuple[float | None, str | None]:
     if not math.isfinite(num):
         return None, f"значение «{raw_value}» не является конечным числом"
     return num, None
-
-
-def validate_mxene_form(
-    text_values: dict[str, str],
-    numeric_values: dict[str, str],
-    numeric_bounds: dict[str, tuple[float, float, str]],
-) -> tuple[bool, dict[str, Any], list[str]]:
-    """Проверяет текстовые и числовые поля формы MXene."""
-    errors: list[str] = []
-    parsed: dict[str, Any] = {}
-
-    for key, val in text_values.items():
-        cleaned = str(val).strip()
-        if not cleaned:
-            errors.append(f"Поле «{key}» не может быть пустым.")
-        else:
-            parsed[key] = cleaned
-
-    for key, raw_val in numeric_values.items():
-        min_val, max_val, label = numeric_bounds[key]
-        num, parse_err = _parse_float_strict(raw_val)
-        if parse_err is not None:
-            errors.append(f"Поле «{label}»: {parse_err}.")
-            continue
-        assert num is not None
-        if num < min_val or num > max_val:
-            errors.append(
-                f"Поле «{label}»: значение {num:g} выходит за допустимые границы [{min_val:g}; {max_val:g}]."
-            )
-            continue
-        parsed[key] = num
-
-    return len(errors) == 0, parsed, errors
 
 
 def validate_structure_bytes(filename: str, raw_bytes: bytes) -> tuple[bool, str, list[str]]:
@@ -335,6 +262,8 @@ def _format_status_badge(model: dict[str, Any], ml_state: dict[str, Any] | None)
     if model["status"] == "local_cpu":
         if ml_state and ml_state.get("available"):
             return "🟢 Локально CPU — подключена"
+        if ml_state and ml_state.get("status") in {"dep_error", "warmup_error", "load_error"}:
+            return "🟠 Локально CPU — не готова"
         return "🟡 Локально CPU — ожидает ML-модуль"
     return "🔴 Каталог-советчик — нужен GPU"
 
@@ -432,16 +361,35 @@ def _render_advisor_tab(
         is_rec = _is_recommended_for_task(model["id"], task_choice)
 
         with st.container(border=True):
-            header_cols = st.columns([3, 2])
-            with header_cols[0]:
-                title_suffix = " — ⭐ Рекомендовано под задачу" if is_rec else ""
-                st.markdown(f"### {model['name']}{title_suffix}")
-                st.caption(f"ID: `{model['id']}` | Архитектура: {model['architecture']}")
-            with header_cols[1]:
-                st.markdown(f"**Статус:** {badge}")
-                st.caption(f"Железо: {model['hardware_req']}")
+            title_suffix = " — ⭐ Рекомендовано под задачу" if is_rec else ""
+            escaped_name = html.escape(str(model["name"]))
+            escaped_suffix = html.escape(title_suffix)
+            escaped_id = html.escape(str(model["id"]))
+            escaped_arch = html.escape(str(model["architecture"]))
+            escaped_badge = html.escape(badge)
+            escaped_hw = html.escape(str(model["hardware_req"]))
 
-            info_col1, info_col2 = st.columns(2)
+            header_html = (
+                '<div style="display: flex; justify-content: space-between; align-items: flex-start; '
+                'gap: 20px; padding-bottom: 0.75rem; margin-bottom: 0.85rem; '
+                'border-bottom: 1px solid rgba(128, 128, 128, 0.22);">'
+                '<div style="flex: 1 1 auto; min-width: 0;">'
+                f'<div style="font-size: 1.3rem; font-weight: 600; line-height: 1.3; margin: 0 0 0.25rem 0;">'
+                f'{escaped_name}{escaped_suffix}</div>'
+                f'<div style="font-size: 0.85rem; opacity: 0.75; line-height: 1.4; margin: 0;">'
+                f'ID: <code>{escaped_id}</code> | Архитектура: {escaped_arch}</div>'
+                '</div>'
+                '<div style="flex: 0 0 auto; text-align: right; max-width: 44%;">'
+                f'<div style="font-size: 0.95rem; line-height: 1.3; margin: 0 0 0.25rem 0; white-space: nowrap;">'
+                f'<strong>Статус:</strong> {escaped_badge}</div>'
+                f'<div style="font-size: 0.85rem; opacity: 0.75; line-height: 1.4; margin: 0;">'
+                f'Железо: {escaped_hw}</div>'
+                '</div>'
+                '</div>'
+            )
+            st.markdown(header_html, unsafe_allow_html=True)
+
+            info_col1, info_col2 = st.columns(2, gap="large")
             with info_col1:
                 st.markdown(f"**Формат входа:** {model['input_format']}")
                 st.markdown(f"**Формат выхода:** {model['output_format']}")
@@ -451,11 +399,13 @@ def _render_advisor_tab(
                 st.markdown(f"**Ограничения:** {model['limitations']}")
 
             if model["status"] == "catalog_gpu_only":
+                st.markdown('<div style="height: 0.5rem;"></div>', unsafe_allow_html=True)
                 st.info(
                     "Режим каталога-советчика: запуск требует NVIDIA GPU и недоступен локально на CPU. "
                     "По согласованию с куратором запрос GPU в техподдержке ИРИТ запланирован на следующий спринт."
                 )
             elif ml_state and not ml_state.get("available"):
+                st.markdown('<div style="height: 0.5rem;"></div>', unsafe_allow_html=True)
                 st.warning(ml_state["message"])
 
 
@@ -484,25 +434,9 @@ def _render_prediction_output(result: dict[str, Any]) -> None:
             st.json(details)
 
 
-def _apply_mxene_sample_to_state(
-    sample_row: pd.Series,
-    feature_cols: list[str],
-    numeric_cols: set[str],
-) -> None:
-    """Записывает значения выбранного образца из mxene_clean.csv в session_state."""
-    for col in feature_cols:
-        val = sample_row[col]
-        if pd.isna(val):
-            st.session_state[f"mxene_csv_{col}"] = ""
-        elif col in numeric_cols:
-            st.session_state[f"mxene_csv_{col}"] = f"{val}"
-        else:
-            st.session_state[f"mxene_csv_{col}"] = str(val)
-
-
 def _render_mxene_calculator(ml_state: dict[str, Any]) -> None:
-    """Отрисовывает форму расчета для модели MXene Gas Sensor (CPU)."""
-    st.markdown("#### MXene Gas Sensor ML (локальный CPU)")
+    """Отрисовывает форму расчета для модели MXene Gas Sensor ML (XGBoost, CPU)."""
+    st.markdown(f"#### {MXENE_MODEL_NAME} (локальный CPU)")
     if ml_state["available"]:
         st.success(ml_state["message"])
     else:
@@ -512,125 +446,128 @@ def _render_mxene_calculator(ml_state: dict[str, Any]) -> None:
     if csv_err:
         st.error(csv_err)
 
-    if df_mxene is not None and not df_mxene.empty:
-        target_cols = [c for c in df_mxene.columns if c.strip().lower() in TARGET_COL_CANDIDATES]
-        feature_cols = [c for c in df_mxene.columns if c not in target_cols]
-        numeric_cols = {
-            c for c in feature_cols if pd.api.types.is_numeric_dtype(df_mxene[c])
-        }
+    has_dataset = (
+        df_mxene is not None
+        and not df_mxene.empty
+        and {"mxene_formula", "adsorbate"}.issubset(df_mxene.columns)
+    )
 
-        label_cols = [c for c in feature_cols if c not in numeric_cols][:2]
-        sample_options = ["— Ввести вручную —"]
-        for idx, row in df_mxene.head(500).iterrows():
-            desc = " | ".join(f"{c}={row[c]}" for c in label_cols if pd.notna(row[c]))
-            sample_options.append(f"Строка #{idx}" + (f" ({desc})" if desc else ""))
-
-        selected_sample = st.selectbox(
-            "Выбор готового образца из `data/mxene_clean.csv` (автоподстановка параметров)",
-            options=sample_options,
-            key="mxene_sample_selector",
+    if has_dataset:
+        input_mode = st.radio(
+            "Способ задания образца",
+            options=[
+                "Выбрать пару из data/mxene_clean.csv",
+                "Ввести формулу и газ вручную",
+            ],
+            horizontal=True,
+            key="mxene_input_mode",
         )
-
-        if selected_sample != "— Ввести вручную —":
-            selected_idx = int(selected_sample.split("#")[1].split()[0])
-            sample_row = df_mxene.loc[selected_idx]
-            if st.session_state.get("mxene_last_applied_sample") != selected_sample:
-                _apply_mxene_sample_to_state(sample_row, feature_cols, numeric_cols)
-                st.session_state["mxene_last_applied_sample"] = selected_sample
-            if target_cols:
-                ref_parts = [
-                    f"{tc}: **{sample_row[tc]}**"
-                    for tc in target_cols
-                    if pd.notna(sample_row[tc])
-                ]
-                if ref_parts:
-                    st.caption("Эталонное значение в датасете: " + ", ".join(ref_parts))
-        else:
-            st.session_state["mxene_last_applied_sample"] = None
-
-        text_values: dict[str, str] = {}
-        numeric_values: dict[str, str] = {}
-        numeric_bounds: dict[str, tuple[float, float, str]] = {}
-
-        cols = st.columns(2)
-        for idx, col_name in enumerate(feature_cols):
-            state_key = f"mxene_csv_{col_name}"
-            if state_key not in st.session_state:
-                first_valid = df_mxene[col_name].dropna()
-                st.session_state[state_key] = str(first_valid.iloc[0]) if not first_valid.empty else ""
-
-            with cols[idx % 2]:
-                if col_name in numeric_cols:
-                    series_num = pd.to_numeric(df_mxene[col_name], errors="coerce").dropna()
-                    if not series_num.empty:
-                        col_min = float(series_num.min())
-                        col_max = float(series_num.max())
-                        span = max(abs(col_max - col_min), 1.0)
-                        bound_min = col_min - span
-                        bound_max = col_max + span
-                    else:
-                        bound_min, bound_max = -1e6, 1e6
-                    raw = st.text_input(
-                        f"{col_name}",
-                        key=state_key,
-                        help=f"Числовое поле (ориентир: от {bound_min:.3g} до {bound_max:.3g}).",
-                    )
-                    numeric_values[col_name] = raw
-                    numeric_bounds[col_name] = (bound_min, bound_max, col_name)
-                else:
-                    raw = st.text_input(f"{col_name}", key=state_key)
-                    text_values[col_name] = raw
     else:
         st.info(
-            "Файл `data/mxene_clean.csv` пока отсутствует — используется ручной ввод параметров."
+            "Файл `data/mxene_clean.csv` отсутствует или не содержит колонок "
+            "`mxene_formula` / `adsorbate` — используется ручной ввод."
         )
-        text_values = {}
-        numeric_values = {}
-        numeric_bounds = {}
+        input_mode = "Ввести формулу и газ вручную"
 
+    if input_mode == "Выбрать пару из data/mxene_clean.csv" and has_dataset:
+        formulas = sorted(df_mxene["mxene_formula"].dropna().astype(str).unique().tolist())
+        col_formula, col_gas = st.columns(2)
+        with col_formula:
+            mxene_formula = st.selectbox(
+                "Материал MXene (`mxene_formula`)",
+                options=formulas,
+                key="mxene_select_formula",
+                help=f"Доступно {len(formulas)} уникальных MXene из всего датасета.",
+            )
+        available_gases = sorted(
+            df_mxene.loc[
+                df_mxene["mxene_formula"].astype(str) == mxene_formula,
+                "adsorbate",
+            ]
+            .dropna()
+            .astype(str)
+            .unique()
+            .tolist()
+        )
+        with col_gas:
+            adsorbate = st.selectbox(
+                "Газ-адсорбат (`adsorbate`)",
+                options=available_gases,
+                key="mxene_select_gas",
+                help="Показаны газы, доступные для выбранного MXene в датасете.",
+            )
+
+        matched = df_mxene[
+            (df_mxene["mxene_formula"].astype(str) == mxene_formula)
+            & (df_mxene["adsorbate"].astype(str) == adsorbate)
+        ]
+        if not matched.empty:
+            sample_row = matched.iloc[0]
+            info_parts: list[str] = []
+            if "adsorption_site" in df_mxene.columns and pd.notna(sample_row["adsorption_site"]):
+                info_parts.append(f"Сайт: **{sample_row['adsorption_site']}**")
+            if "split" in df_mxene.columns and pd.notna(sample_row["split"]):
+                split_val = str(sample_row["split"])
+                split_note = " (на train ошибка занижена)" if split_val == "train" else ""
+                info_parts.append(f"Выборка: **{split_val}**{split_note}")
+            if "Eads" in df_mxene.columns and pd.notna(sample_row["Eads"]):
+                info_parts.append(f"Эталон `Eads`: **{float(sample_row['Eads']):.4f} эВ**")
+            if info_parts:
+                st.caption("Справка по образцу: " + " | ".join(info_parts))
+
+            descriptor_cols = [
+                col for col in df_mxene.columns if col.strip().lower() not in MXENE_NON_FEATURES
+            ]
+            if descriptor_cols:
+                with st.expander(
+                    f"Дескрипторы образца из data/mxene_clean.csv ({len(descriptor_cols)} признаков — подставляются моделью автоматически)"
+                ):
+                    desc_df = pd.DataFrame(
+                        {
+                            "Признак": descriptor_cols,
+                            "Значение": [sample_row[c] for c in descriptor_cols],
+                        }
+                    )
+                    st.dataframe(desc_df, width="stretch", hide_index=True)
+    else:
         col_left, col_right = st.columns(2)
         with col_left:
-            st.markdown("**Категориальные параметры**")
-            for field in DEFAULT_MXENE_TEXT_FIELDS:
-                text_values[field["label"]] = st.text_input(
-                    field["label"],
-                    value=field["default"],
-                    help=field["help"],
-                    key=f"mxene_manual_{field['key']}",
-                )
+            mxene_formula = st.text_input(
+                "Материал MXene (`mxene_formula`)",
+                value="Ti2CO2",
+                help="Формула MXene из data/mxene_clean.csv, например: Ti2CO2, Ti3C2O2, V2CO2, Nb2CO2.",
+                key="mxene_manual_formula",
+            )
         with col_right:
-            st.markdown("**Числовые дескрипторы**")
-            for field in DEFAULT_MXENE_NUMERIC_FIELDS:
-                val_str = st.text_input(
-                    field["label"],
-                    value=field["default"],
-                    help=field["help"],
-                    key=f"mxene_manual_{field['key']}",
-                )
-                numeric_values[field["key"]] = val_str
-                numeric_bounds[field["key"]] = (
-                    float(field["min"]),
-                    float(field["max"]),
-                    field["label"],
-                )
+            adsorbate = st.text_input(
+                "Газ-адсорбат (`adsorbate`)",
+                value="NO2",
+                help="Поддерживаемые газы: CH4, CO, H2S, HCHO, NH3, NO, NO2, SO2.",
+                key="mxene_manual_gas",
+            )
 
     if st.button("Рассчитать E_ads (MXene)", type="primary"):
-        is_valid, parsed_data, val_errors = validate_mxene_form(
-            text_values=text_values,
-            numeric_values=numeric_values,
-            numeric_bounds=numeric_bounds,
-        )
-        summary_parts = [f"{k}={v}" for k, v in list(text_values.items())[:2]]
-        summary_parts += [f"{k}={v}" for k, v in list(numeric_values.items())[:3]]
-        input_summary = "; ".join(summary_parts) if summary_parts else "MXene параметры"
+        clean_formula = str(mxene_formula or "").strip()
+        clean_gas = str(adsorbate or "").strip()
+        input_data = {
+            "mxene_formula": clean_formula,
+            "adsorbate": clean_gas,
+        }
+        input_summary = f"mxene_formula={clean_formula or '—'}; adsorbate={clean_gas or '—'}"
 
-        if not is_valid:
+        val_errors: list[str] = []
+        if not clean_formula:
+            val_errors.append("Поле «mxene_formula» не может быть пустым.")
+        if not clean_gas:
+            val_errors.append("Поле «adsorbate» не может быть пустым.")
+
+        if val_errors:
             err_text = " ".join(val_errors)
             for err in val_errors:
                 st.error(err)
             log_run(
                 model_id="mxene_ml",
-                model_name="MXene Gas Sensor ML",
+                model_name=MXENE_MODEL_NAME,
                 input_summary=input_summary,
                 status="error",
                 inference_time_sec=0.0,
@@ -640,13 +577,13 @@ def _render_mxene_calculator(ml_state: dict[str, Any]) -> None:
 
         if not ml_state["available"]:
             msg = (
-                "Входные параметры прошли проверку, но расчет невозможен: "
+                "Входные параметры указаны, но расчёт невозможен: "
                 f"{ml_state['message']}"
             )
             st.warning(msg)
             log_run(
                 model_id="mxene_ml",
-                model_name="MXene Gas Sensor ML",
+                model_name=MXENE_MODEL_NAME,
                 input_summary=input_summary,
                 status="error",
                 inference_time_sec=0.0,
@@ -656,13 +593,13 @@ def _render_mxene_calculator(ml_state: dict[str, Any]) -> None:
 
         model = ml_state["model"]
         try:
-            ok, model_errors = model.validate_input(parsed_data)
+            ok, model_errors = model.validate_input(input_data)
             if not ok:
                 err_text = "; ".join(model_errors) if model_errors else "Ошибка валидации входных данных моделью."
                 st.error(err_text)
                 log_run(
                     model_id="mxene_ml",
-                    model_name="MXene Gas Sensor ML",
+                    model_name=MXENE_MODEL_NAME,
                     input_summary=input_summary,
                     status="error",
                     inference_time_sec=0.0,
@@ -671,13 +608,13 @@ def _render_mxene_calculator(ml_state: dict[str, Any]) -> None:
                 return
 
             with st.spinner("Выполняется локальный расчет MXene на CPU..."):
-                result = model.predict(parsed_data)
+                result = model.predict(input_data)
         except Exception as exc:
             err_text = f"Внутренняя ошибка при запуске MXene-модели: {exc}"
             st.error(err_text)
             log_run(
                 model_id="mxene_ml",
-                model_name="MXene Gas Sensor ML",
+                model_name=MXENE_MODEL_NAME,
                 input_summary=input_summary,
                 status="error",
                 inference_time_sec=0.0,
@@ -689,7 +626,7 @@ def _render_mxene_calculator(ml_state: dict[str, Any]) -> None:
             _render_prediction_output(result)
             log_run(
                 model_id="mxene_ml",
-                model_name="MXene Gas Sensor ML",
+                model_name=MXENE_MODEL_NAME,
                 input_summary=input_summary,
                 status="ok",
                 e_ads_ev=result.get("e_ads_ev"),
@@ -702,7 +639,7 @@ def _render_mxene_calculator(ml_state: dict[str, Any]) -> None:
             st.error(err_text)
             log_run(
                 model_id="mxene_ml",
-                model_name="MXene Gas Sensor ML",
+                model_name=MXENE_MODEL_NAME,
                 input_summary=input_summary,
                 status="error",
                 inference_time_sec=float(result.get("inference_time_sec") or 0.0),
@@ -710,125 +647,168 @@ def _render_mxene_calculator(ml_state: dict[str, Any]) -> None:
             )
 
 
+def _get_mace_presets(ml_state: dict[str, Any]) -> list[str]:
+    """Получает список доступных пресетов через MACEModel.available_presets() или папку структур."""
+    model_obj = ml_state.get("model") or ml_state.get("model_class")
+    avail_fn = getattr(model_obj, "available_presets", None)
+    if callable(avail_fn):
+        try:
+            return list(avail_fn())
+        except Exception:
+            pass
+    return list_structure_presets(STRUCTURES_DIR)
+
+
 def _render_mace_calculator(ml_state: dict[str, Any]) -> None:
     """Отрисовывает форму расчета для модели MACE-MP-0 (small, CPU)."""
-    st.markdown("#### MACE-MP-0 (small, локальный CPU)")
+    st.markdown(f"#### {MACE_MODEL_NAME} (локальный CPU)")
     if ml_state["available"]:
         st.success(ml_state["message"])
     else:
         st.warning(ml_state["message"])
 
-    presets = list_structure_presets(STRUCTURES_DIR)
+    presets = _get_mace_presets(ml_state)
     source_mode = st.radio(
         "Источник атомной структуры",
         options=[
             "Готовый пресет из data/structures/",
-            "Загрузить свой файл (.xyz / .cif)",
+            "Загрузить свои 3 файла (.xyz / .cif)",
         ],
         horizontal=True,
         key="mace_source_mode",
     )
 
-    selected_preset: Path | None = None
-    uploaded_file = None
+    selected_preset: str | None = None
+    uploaded_files: dict[str, Any] = {}
 
     if source_mode == "Готовый пресет из data/structures/":
         if not presets:
             st.info(
-                "В папке `data/structures/` пока нет файлов `.xyz` или `.cif`. "
-                "Переключитесь на загрузку своего файла."
+                "В папке `data/structures/` пока нет полных пресетов "
+                "(`*_system.xyz`, `*_surface.xyz`, `*_molecule.xyz`). "
+                "Переключитесь на загрузку своих 3 файлов."
             )
         else:
-            preset_names = [p.name for p in presets]
-            chosen_name = st.selectbox(
-                "Выберите пресет структуры",
-                options=preset_names,
+            selected_preset = st.selectbox(
+                "Выберите готовый пресет",
+                options=presets,
                 key="mace_preset_select",
+                help="Каждый пресет включает три файла: систему (поверхность+молекула), поверхность и молекулу.",
             )
-            selected_preset = next(p for p in presets if p.name == chosen_name)
-            try:
-                preview_lines = selected_preset.read_text(encoding="utf-8").splitlines()[:15]
-                with st.expander("Предпросмотр файла структуры (первые 15 строк)"):
-                    st.code("\n".join(preview_lines), language="text")
-            except Exception as exc:
-                st.warning(f"Не удалось прочитать превью пресета: {exc}")
+            system_preview_path = STRUCTURES_DIR / f"{selected_preset}_system.xyz"
+            st.caption(
+                f"Файлы пресета: `{selected_preset}_system.xyz`, "
+                f"`{selected_preset}_surface.xyz`, `{selected_preset}_molecule.xyz`"
+            )
+            if system_preview_path.exists():
+                try:
+                    preview_lines = system_preview_path.read_text(encoding="utf-8").splitlines()[:15]
+                    with st.expander(f"Предпросмотр `{system_preview_path.name}` (первые 15 строк)"):
+                        st.code("\n".join(preview_lines), language="text")
+                except Exception as exc:
+                    st.warning(f"Не удалось прочитать превью пресета: {exc}")
     else:
-        uploaded_file = st.file_uploader(
-            "Загрузите файл атомной структуры (ожидаются форматы .xyz или .cif)",
-            key="mace_file_uploader",
+        st.caption(
+            "Для расчёта $E_{\\text{ads}} = E(\\text{система}) - E(\\text{поверхность}) - E(\\text{молекула})$ "
+            "загрузите все три структуры в формате `.xyz` или `.cif`."
         )
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            uploaded_files["system_path"] = st.file_uploader(
+                "1. Система (поверхность + молекула)",
+                key="mace_upload_system",
+            )
+        with c2:
+            uploaded_files["surface_path"] = st.file_uploader(
+                "2. Чистая поверхность",
+                key="mace_upload_surface",
+            )
+        with c3:
+            uploaded_files["molecule_path"] = st.file_uploader(
+                "3. Молекула отдельно",
+                key="mace_upload_molecule",
+            )
 
     if st.button("Рассчитать E_ads (MACE-MP-0)", type="primary"):
+        file_titles = {
+            "system_path": "система",
+            "surface_path": "поверхность",
+            "molecule_path": "молекула",
+        }
+        raw_uploads: dict[str, tuple[str, bytes]] = {}
+
         if source_mode == "Готовый пресет из data/structures/":
-            if selected_preset is None:
-                err_msg = "Не выбран файл пресета из `data/structures/`."
+            if not selected_preset:
+                err_msg = "Не выбран готовый пресет из `data/structures/`."
                 st.error(err_msg)
                 log_run(
                     model_id="mace_mp0",
-                    model_name="MACE-MP-0 (small)",
+                    model_name=MACE_MODEL_NAME,
                     input_summary="Пресет не выбран",
                     status="error",
                     inference_time_sec=0.0,
                     error_message=err_msg,
                 )
                 return
-            filename = selected_preset.name
-            try:
-                raw_bytes = selected_preset.read_bytes()
-            except Exception as exc:
-                err_msg = f"Ошибка чтения пресета «{filename}»: {exc}"
-                st.error(err_msg)
-                log_run(
-                    model_id="mace_mp0",
-                    model_name="MACE-MP-0 (small)",
-                    input_summary=f"Пресет: {filename}",
-                    status="error",
-                    inference_time_sec=0.0,
-                    error_message=err_msg,
-                )
-                return
-            source_label = f"Пресет: {filename}"
+            source_label = f"Пресет: {selected_preset}"
         else:
-            if uploaded_file is None:
-                err_msg = "Загрузите файл структуры (.xyz или .cif) перед запуском расчета."
+            missing_labels = [
+                file_titles[k] for k in ("system_path", "surface_path", "molecule_path")
+                if uploaded_files.get(k) is None
+            ]
+            if missing_labels:
+                err_msg = (
+                    "Загрузите все три файла (.xyz или .cif). "
+                    f"Не указаны: {', '.join(missing_labels)}."
+                )
                 st.error(err_msg)
                 log_run(
                     model_id="mace_mp0",
-                    model_name="MACE-MP-0 (small)",
-                    input_summary="Файл не загружен",
+                    model_name=MACE_MODEL_NAME,
+                    input_summary="Не загружены все 3 файла",
                     status="error",
                     inference_time_sec=0.0,
                     error_message=err_msg,
                 )
                 return
-            filename = uploaded_file.name
-            raw_bytes = uploaded_file.getvalue()
-            source_label = f"Файл: {filename} ({len(raw_bytes)} байт)"
 
-        is_valid, content_str, val_errors = validate_structure_bytes(filename, raw_bytes)
-        if not is_valid:
-            err_msg = " ".join(val_errors)
-            for err in val_errors:
-                st.error(err)
-            log_run(
-                model_id="mace_mp0",
-                model_name="MACE-MP-0 (small)",
-                input_summary=source_label,
-                status="error",
-                inference_time_sec=0.0,
-                error_message=err_msg,
-            )
-            return
+            all_errors: list[str] = []
+            summary_parts: list[str] = []
+            for key in ("system_path", "surface_path", "molecule_path"):
+                up_file = uploaded_files[key]
+                fname = up_file.name
+                fbytes = up_file.getvalue()
+                raw_uploads[key] = (fname, fbytes)
+                summary_parts.append(f"{file_titles[key]}={fname}")
+                is_valid, _, val_errors = validate_structure_bytes(fname, fbytes)
+                if not is_valid:
+                    for err in val_errors:
+                        all_errors.append(f"{file_titles[key].capitalize()} ({fname}): {err}")
+
+            source_label = "Файлы: " + ", ".join(summary_parts)
+            if all_errors:
+                err_msg = " ".join(all_errors)
+                for err in all_errors:
+                    st.error(err)
+                log_run(
+                    model_id="mace_mp0",
+                    model_name=MACE_MODEL_NAME,
+                    input_summary=source_label,
+                    status="error",
+                    inference_time_sec=0.0,
+                    error_message=err_msg,
+                )
+                return
 
         if not ml_state["available"]:
             msg = (
-                f"Файл «{filename}» прошел проверку формата, но расчет невозможен: "
+                "Входные данные проверены, но расчет невозможен: "
                 f"{ml_state['message']}"
             )
             st.warning(msg)
             log_run(
                 model_id="mace_mp0",
-                model_name="MACE-MP-0 (small)",
+                model_name=MACE_MODEL_NAME,
                 input_summary=source_label,
                 status="error",
                 inference_time_sec=0.0,
@@ -837,26 +817,21 @@ def _render_mace_calculator(ml_state: dict[str, Any]) -> None:
             return
 
         model = ml_state["model"]
-        temp_path: Path | None = None
+        temp_paths: list[Path] = []
         try:
-            if selected_preset is not None:
-                structure_path = selected_preset
+            if source_mode == "Готовый пресет из data/structures/":
+                input_data: dict[str, str] = {"preset": str(selected_preset)}
             else:
-                suffix = Path(filename).suffix.lower()
-                with tempfile.NamedTemporaryFile(
-                    delete=False, suffix=suffix, mode="wb"
-                ) as tmp_file:
-                    tmp_file.write(raw_bytes)
-                    temp_path = Path(tmp_file.name)
-                structure_path = temp_path
-
-            input_data = {
-                "structure_path": str(structure_path),
-                "file_path": str(structure_path),
-                "file_name": filename,
-                "file_format": Path(filename).suffix.lower().lstrip("."),
-                "file_content": content_str,
-            }
+                input_data = {}
+                for key, (fname, fbytes) in raw_uploads.items():
+                    suffix = Path(fname).suffix.lower()
+                    with tempfile.NamedTemporaryFile(
+                        delete=False, suffix=suffix, mode="wb"
+                    ) as tmp_file:
+                        tmp_file.write(fbytes)
+                        tmp_path = Path(tmp_file.name)
+                    temp_paths.append(tmp_path)
+                    input_data[key] = str(tmp_path)
 
             ok, model_errors = model.validate_input(input_data)
             if not ok:
@@ -864,7 +839,7 @@ def _render_mace_calculator(ml_state: dict[str, Any]) -> None:
                 st.error(err_msg)
                 log_run(
                     model_id="mace_mp0",
-                    model_name="MACE-MP-0 (small)",
+                    model_name=MACE_MODEL_NAME,
                     input_summary=source_label,
                     status="error",
                     inference_time_sec=0.0,
@@ -879,7 +854,7 @@ def _render_mace_calculator(ml_state: dict[str, Any]) -> None:
             st.error(err_msg)
             log_run(
                 model_id="mace_mp0",
-                model_name="MACE-MP-0 (small)",
+                model_name=MACE_MODEL_NAME,
                 input_summary=source_label,
                 status="error",
                 inference_time_sec=0.0,
@@ -887,14 +862,15 @@ def _render_mace_calculator(ml_state: dict[str, Any]) -> None:
             )
             return
         finally:
-            if temp_path is not None and temp_path.exists():
-                temp_path.unlink(missing_ok=True)
+            for tmp_path in temp_paths:
+                if tmp_path.exists():
+                    tmp_path.unlink(missing_ok=True)
 
         if result.get("status") == "ok":
             _render_prediction_output(result)
             log_run(
                 model_id="mace_mp0",
-                model_name="MACE-MP-0 (small)",
+                model_name=MACE_MODEL_NAME,
                 input_summary=source_label,
                 status="ok",
                 e_ads_ev=result.get("e_ads_ev"),
@@ -907,7 +883,7 @@ def _render_mace_calculator(ml_state: dict[str, Any]) -> None:
             st.error(err_msg)
             log_run(
                 model_id="mace_mp0",
-                model_name="MACE-MP-0 (small)",
+                model_name=MACE_MODEL_NAME,
                 input_summary=source_label,
                 status="error",
                 inference_time_sec=float(result.get("inference_time_sec") or 0.0),

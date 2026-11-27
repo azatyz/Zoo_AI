@@ -1,3 +1,4 @@
+
 pair_name,surface,adsorbate,reference_e_ads_ev,method_or_level,source_citation
 Cu111_CO,Cu(111),CO,-0.85,DFT-PBE,"Catalysis-Hub (DOI: 10.24435/catalysis:h7-m); Typical PBE value for top-site adsorption"
 Pt111_CO,Pt(111),CO,-1.45,DFT-RPBE,"Well-known benchmark; RPBE corrects PBE overbinding. See: Hammer et al., Surf. Sci. 1999 or Catalysis-Hub entries"

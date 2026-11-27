@@ -1,3 +1,16 @@
+# UI
 streamlit
-numpy
-matplotlib
+matplotlib==3.11.2
+
+# Adsorption models. Windows, Python 3.11, CPU only (no CUDA)
+--extra-index-url https://download.pytorch.org/whl/cpu
+numpy==2.4.6
+pandas==3.1.1
+scipy==1.17.1
+scikit-learn==1.9.1
+xgboost==3.2.0
+joblib
+ase==3.29.0
+torch==2.15.0+cpu
+mace-torch==0.3.17
+e3nn==0.4.4

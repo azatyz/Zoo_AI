@@ -17,6 +17,7 @@ env/
 *.db-journal
 *.db-wal
 *.db-shm
+*.db
 
 # Raw archives & heavy downloads
 *.zip

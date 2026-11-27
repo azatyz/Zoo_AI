@@ -56,6 +56,18 @@ class BaseAdsorptionModel(ABC):
 
     # ---- единая обёртка, её наследники не переопределяют ------------------
 
+    def warmup(self) -> tuple:
+        """Загрузить веса заранее (например, при старте приложения), чтобы первый predict не ждал.
+        Возвращает (True, None) или (False, текст ошибки). Повторные вызовы ничего не делают."""
+        if self._loaded:
+            return True, None
+        try:
+            self.load()
+        except Exception as exc:
+            return False, f"Не удалось загрузить модель «{self.name}»: {exc}"
+        self._loaded = True
+        return True, None
+
     def predict(self, input_data: dict) -> dict:
         start = time.perf_counter()
 
@@ -78,12 +90,9 @@ class BaseAdsorptionModel(ABC):
             if not ok:
                 return finish("error", error="Некорректные входные данные: " + "; ".join(errors))
 
-            if not self._loaded:
-                try:
-                    self.load()
-                except Exception as exc:
-                    return finish("error", error=f"Не удалось загрузить модель «{self.name}»: {exc}")
-                self._loaded = True
+            loaded, load_error = self.warmup()
+            if not loaded:
+                return finish("error", error=load_error)
 
             result = self._predict_impl(input_data)
             e_ads = result.get("e_ads_ev")

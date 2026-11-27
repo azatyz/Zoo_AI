@@ -14,3 +14,4 @@ ase==3.29.0
 torch==2.15.0+cpu
 mace-torch==0.3.17
 e3nn==0.4.4
+

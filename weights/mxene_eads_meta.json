@@ -1,0 +1,28 @@
+{
+  "features": [
+    "M_electronegativity",
+    "MagpieData avg_dev Column",
+    "MagpieData maximum GSvolume_pa",
+    "MagpieData mean GSbandgap",
+    "MagpieData minimum MeltingT",
+    "MagpieData range CovalentRadius",
+    "MagpieData range Electronegativity",
+    "MagpieData range GSbandgap",
+    "MagpieData range NpValence",
+    "band_alignment_proxy",
+    "delta_chi_M_gas",
+    "gas_MW",
+    "gas_chem_potential",
+    "gas_kinetic_diam",
+    "gas_polarizability",
+    "term_frac_O",
+    "term_frac_OH"
+  ],
+  "target": "Eads",
+  "unit": "eV",
+  "metrics_test": {
+    "MAE": 0.0124,
+    "RMSE": 0.0167,
+    "R2": 0.9993
+  }
+}

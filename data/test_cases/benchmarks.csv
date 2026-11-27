@@ -1,7 +1,6 @@
-
-pair_name,surface,adsorbate,reference_e_ads_ev,method_or_level,source_citation
-Cu111_CO,Cu(111),CO,-0.85,DFT-PBE,"Catalysis-Hub (DOI: 10.24435/catalysis:h7-m); Typical PBE value for top-site adsorption"
-Pt111_CO,Pt(111),CO,-1.45,DFT-RPBE,"Well-known benchmark; RPBE corrects PBE overbinding. See: Hammer et al., Surf. Sci. 1999 or Catalysis-Hub entries"
-Au111_CO,Au(111),CO,-0.20,DFT-PBE,"Weak physisorption/chemisorption. Value varies significantly with vdW corrections. PBE often underestimates. [ТРЕБУЕТ ПРОВЕРКИ для точного PBE значения без vdW]"
-Ni111_CO,Ni(111),CO,-1.70,DFT-PBE,"Strong chemisorption. Typical PBE value for fcc-hollow or top site. See: Greeley et al., J. Phys. Chem. C 2007"
-Pt111_H2O,Pt(111),H2O,-0.35,DFT-PBE,"Water monomer adsorption. Weak binding. [ТРЕБУЕТ ПРОВЕРКИ для конкретного сайта adsorption]"
+название_пары,поверхность,адсорбат,reference_e_ads_ev,метод_или_уровень,ссылка на источник
+Cu111_CO_fcc,Cu(111),CO,-0.86,"DFT-PBE; сайт fcc-hollow (PBE ошибочно предпочитает hollow вместо top); покрытие 0.25 ML; для top-сайта PBE даёт -0.72","Ren X.; Rinke P.; Scheffler M. Phys. Rev. B 80, 045402 (2009). DOI: 10.1103/PhysRevB.80.045402 (Table II)"
+Pt111_CO_top,Pt(111),CO,-1.66,"DFT-PBE; сайт top (экспериментально предпочтительный); покрытие 0.25 ML; PBE для fcc даёт -1.82 (переоценка связи)","Stroppa A. et al. Phys. Rev. B 76, 195440 (2007). DOI: 10.1103/PhysRevB.76.195440 (Table V); arXiv:0706.3615"
+Au111_CO_top,Au(111),CO,-0.28,"DFT-PW91; сайт top; покрытие ~0.33 ML; слабая связь; при росте покрытия падает до -0.10; эксперимент TPD ~-0.40","Mehmood F.; Kara A.; Rahman T.S.; Henry C.R. Phys. Rev. B 79, 075422 (2009). DOI: 10.1103/PhysRevB.79.075422 (Table 2); arXiv:0810.0049"
+Ni111_CO_hcp,Ni(111),CO,-2.07,"DFT-PBE (spin-polarized); сайт hcp-hollow; покрытие 0.25 ML; fcc даёт -2.05; ВАЖНО: в статье энергия приведена как положительная величина связи, здесь переведена в нашу конвенцию со знаком минус","Wang K.; Li K.; Wang F. Energies 16(1), 525 (2023). DOI: 10.3390/en16010525 (Table 1)"
+Pt111_H2O_top,Pt(111),H2O,-0.46,"DFT-PBE+D3(BJ); молекулярная адсорбция, сайт top, молекула параллельна поверхности; без vdW и с другими vdW-поправками литература даёт -0.24...-0.40","Ungerer M.J. et al. S. Afr. J. Chem. 74 (2021). DOI: 10.17159/0379-4350/2021/v74a10 (аннотация); те же данные: J. Phys. Chem. C 123, 27465 (2019). DOI: 10.1021/acs.jpcc.9b06136"
